@@ -1,31 +1,28 @@
 import fs from 'fs';
 
-import Parser from './Parser';
-import YoutubeParser from './Youtube/Parser';
-import Song from './Youtube/Song';
-
-const parsers = [
-  YoutubeParser
-];
+import Parsers from './Parser/index'
+import config from './config';
+import ora from 'ora';
 
 class Downloader {
 
-  sources: string[];
   folder: string;
-  constructor(sources: string[], destination: string) {
-    this.sources = sources;
+  constructor(destination: string) {
     this.folder = destination;
-    Downloader.createDestination(destination);
+    Downloader.prepareTargetFolder(destination);
   }
 
-  static createDestination(destination: string) {
-    if (!fs.existsSync(destination)) {
-      fs.mkdirSync(destination);
+  static prepareTargetFolder(path: string) {
+    if(config.cleanTargetFolder && fs.existsSync(path)) {
+      fs.rmSync(path, { recursive : true });
+    }
+    if(!fs.existsSync(path)) {
+      fs.mkdirSync(path)
     }
   }
 
   static getParser(url: string) {
-    for(let Parser of parsers) {
+    for(let Parser of Parsers) {
       if(Parser.canParse(url)) {
         return Parser;
       }
@@ -33,28 +30,28 @@ class Downloader {
     return undefined;
   }
 
-  getParsers(): Parser[] {
-    let parsers: Parser[] = [];
-    for(let source of this.sources) {
-      const parser = Downloader.getParser(source);
-      if(parser) {
-        parsers = parsers.concat(parser.init(source));
+
+  async downloadAll(sources: string[]) {
+    for(let source of sources) {
+      const Parser = Downloader.getParser(source);
+      if(Parser) {
+        const parser = new Parser(source);
+        const urls = await parser.getUrls();
+        for(let url of urls) {
+          const spinner = ora(`Getting infos for "${url}"`).start();
+          const song = await parser.getSong(url);
+          spinner.text = `"${song.text}"`;
+          try {
+            await parser.download(song, this.folder)
+            spinner.succeed(`"${song.text}"`);
+          } catch(e) {
+            spinner.fail(`"${song.text}" : [${e}]`);
+          }
+        }
       }
-    }
-    return parsers.filter(s => s);
+    };
   }
 
-  async downloadAll(concurrent: number = 1) {
-    const parsers = this.getParsers();
-    parsers.forEach(async (parser) => {
-      const song: Song = await parser.getSong();
-      const destination = this.folder + '/' + song.getOutputPath();
-      await song.download().pipe(fs.createWriteStream(destination)
-        .on('finish', () => console.log('✓ Finished downloading ' + destination))
-        .on('error', () => console.log('✘ Error downloading ' + destination))
-      );
-    });
-  }
 }
 
 export default Downloader;
